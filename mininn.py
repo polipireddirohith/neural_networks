@@ -1,54 +1,61 @@
+from typing import List, Callable, Union, Tuple
 import numpy as np
 
 class Layer:
-    """Base class for layers."""
-    def forward(self, input):
+    """Base class for neural network layers."""
+    def forward(self, input_data: np.ndarray) -> np.ndarray:
         raise NotImplementedError
     
-    def backward(self, output_gradient, learning_rate):
+    def backward(self, output_gradient: np.ndarray, learning_rate: float) -> np.ndarray:
         raise NotImplementedError
 
 class Dense(Layer):
-    """Fully connected layer."""
-    def __init__(self, input_size, output_size):
-        # He initialization for better convergence with ReLU
+    """Fully connected layer with He initialization."""
+    def __init__(self, input_size: int, output_size: int):
+        # He initialization: random normals * sqrt(2/n)
         self.weights = np.random.randn(input_size, output_size) * np.sqrt(2. / input_size)
         self.bias = np.zeros((1, output_size))
         self.input = None
+        self.weights_grad = None
+        self.bias_grad = None
     
-    def forward(self, input):
-        self.input = input
-        return np.dot(input, self.weights) + self.bias
+    def forward(self, input_data: np.ndarray) -> np.ndarray:
+        self.input = input_data
+        return np.dot(input_data, self.weights) + self.bias
     
-    def backward(self, output_gradient, learning_rate):
-        # Calculate gradients
-        weights_gradient = np.dot(self.input.T, output_gradient) / self.input.shape[0]
-        bias_gradient = np.mean(output_gradient, axis=0, keepdims=True)
+    def backward(self, output_gradient: np.ndarray, learning_rate: float) -> np.ndarray:
+        # Compute gradients
+        # Gradient of Loss w.r.t Weights = Input^T * Gradient_Output
+        self.weights_grad = np.dot(self.input.T, output_gradient) / self.input.shape[0]
+        # Gradient of Loss w.r.t Bias = sum(Gradient_Output)
+        self.bias_grad = np.mean(output_gradient, axis=0, keepdims=True)
         
-        # Calculate input gradient (to pass to previous layer)
+        # Gradient of Loss w.r.t Input (to pass to prev layer) = Gradient_Output * Weights^T
         input_gradient = np.dot(output_gradient, self.weights.T)
         
-        # Update parameters
-        self.weights -= learning_rate * weights_gradient
-        self.bias -= learning_rate * bias_gradient
+        # Update parameters (Gradient Descent)
+        self.weights -= learning_rate * self.weights_grad
+        self.bias -= learning_rate * self.bias_grad
         
         return input_gradient
 
 class Activation(Layer):
-    """Base activation layer."""
-    def __init__(self, activation, activation_prime):
+    """Base activation layer wrapper."""
+    def __init__(self, activation: Callable, activation_prime: Callable):
         self.activation = activation
         self.activation_prime = activation_prime
         self.input = None
         
-    def forward(self, input):
-        self.input = input
-        return self.activation(input)
+    def forward(self, input_data: np.ndarray) -> np.ndarray:
+        self.input = input_data
+        return self.activation(input_data)
     
-    def backward(self, output_gradient, learning_rate):
+    def backward(self, output_gradient: np.ndarray, learning_rate: float) -> np.ndarray:
+        # Element-wise multiplication
         return output_gradient * self.activation_prime(self.input)
 
 class ReLU(Activation):
+    """Rectified Linear Unit activation."""
     def __init__(self):
         super().__init__(
             lambda x: np.maximum(0, x),
@@ -56,85 +63,76 @@ class ReLU(Activation):
         )
 
 class Sigmoid(Activation):
+    """Sigmoid activation for binary classification probabilities."""
     def __init__(self):
         super().__init__(
             lambda x: 1 / (1 + np.exp(-x)),
-            lambda x: (1 / (1 + np.exp(-x))) * (1 - (1 / (1 + np.exp(-x)))) # s * (1-s)
+            # Derivative: s * (1 - s)
+            lambda x: (1 / (1 + np.exp(-x))) * (1 - (1 / (1 + np.exp(-x))))
         )
 
 class Tanh(Activation):
+    """Hyperbolic Tangent activation."""
     def __init__(self):
         super().__init__(
             lambda x: np.tanh(x),
             lambda x: 1 - np.tanh(x) ** 2
         )
 
-def binary_cross_entropy(y_true, y_pred):
-    epsilon = 1e-15
-    y_pred = np.clip(y_pred, epsilon, 1 - epsilon)
-    return -np.mean(y_true * np.log(y_pred) + (1 - y_true) * np.log(1 - y_pred))
-
-def binary_cross_entropy_prime(y_true, y_pred):
-    epsilon = 1e-15
-    y_pred = np.clip(y_pred, epsilon, 1 - epsilon)
-    return (y_pred - y_true) / (y_pred * (1 - y_pred)) / y_true.shape[0]
-
 class Sequential:
-    """Main model class."""
-    def __init__(self, layers):
+    """Linear stack of layers."""
+    def __init__(self, layers: List[Layer]):
         self.layers = layers
         
-    def predict(self, input_data):
+    def predict(self, input_data: np.ndarray) -> np.ndarray:
+        """Forward pass through all layers."""
         output = input_data
         for layer in self.layers:
             output = layer.forward(output)
         return output
     
-    def train(self, x_train, y_train, epochs, learning_rate, callback=None):
+    def train(self, x_train: np.ndarray, y_train: np.ndarray, 
+              epochs: int, learning_rate: float, 
+              callback: Callable = None, 
+              verbose: bool = False) -> List[float]:
+        
         loss_history = []
+        
         for e in range(epochs):
-            output = x_train
+            # 1. Forward Pass
+            output = self.predict(x_train)
             
-            # Forward
-            for layer in self.layers:
-                output = layer.forward(output)
+            # 2. Compute Loss
+            # Using Binary Cross Entropy + epsilon for stability
             
-            # Loss
-            loss = binary_cross_entropy(y_train, output)
+            # Clip output to prevent log(0)
+            output_clipped = np.clip(output, 1e-15, 1 - 1e-15)
+            loss = -np.mean(y_train * np.log(output_clipped) + (1 - y_train) * np.log(1 - output_clipped))
             loss_history.append(loss)
             
-            # Backward
-            # Note: For Sigmoid + BCE, the gradient simplifies to (y_hat - y).
-            # But to keep it modular, we often separate them. 
-            # However, standard backprop starts with dLoss/dOutput.
-            # dLoss/dOutput for BCE is (y_hat - y) / (y_hat * (1-y_hat))
-            # If the last layer is Sigmoid, the derivative cancels out to (y_hat - y).
-            # We will handle this by simple passing the gradient of loss.
+            # 3. Compute Gradient of Loss w.r.t Output
+            # dLoss/dOutput = -(y/y_hat - (1-y)/(1-y_hat))
+            #               = (y_hat - y) / (y_hat * (1 - y_hat))
+            # We divide by N here to average the gradients over the batch
+            grad = (output_clipped - y_train) / (output_clipped * (1 - output_clipped)) 
             
-            # Let's simple calculate gradient of Loss w.r.t Output
-            # We will use the simplified gradient for the output layer directly if we were optimizing,
-            # but sticking to pure modular chain rule:
-            
-            error = (output - y_train) # Simplified gradient if we assume Sigmoid Cross Entropy combined
-            # To be strictly modular, we should output `grad`.
-            # But let's cheat slightly for stability: 
-            # If the last layer is sigmoid, we pass `dZ = A - Y` directly to the layer before it?
-            # No, let's just do standard chain rule.
-            
-            grad = (output - y_train) / np.maximum((output * (1 - output)), 1e-15) 
-            # This can be unstable. Ideally we combine loss + activation.
-            # For this educational toy, let's allow the instability or use a stable MeanSquaredError for testing?
-            # User used BCE.
-            
-            # STABILITY FIX:
-            # We will implement a special `.backward` for the network to handle the last layer efficiently
-            # OR we just implement strictly.
-            # Let's use strict chain rule but cap gradients.
-            
+            # 4. Backward Pass
             for layer in reversed(self.layers):
                 grad = layer.backward(grad, learning_rate)
             
-            if callback and e % 100 == 0:
-                callback(e, loss)
+            if callback:
+                # Calculate accuracy for callback
+                predictions = (output > 0.5).astype(int)
+                accuracy = np.mean(predictions == y_train)
+                callback(e, loss, accuracy)
+            
+            if verbose and (e % 100 == 0):
+                print(f"Epoch {e}, Loss: {loss:.4f}")
                 
         return loss_history
+
+    def evaluate(self, x_test: np.ndarray, y_test: np.ndarray) -> float:
+        output = self.predict(x_test)
+        predictions = (output > 0.5).astype(int)
+        accuracy = np.mean(predictions == y_test)
+        return accuracy
