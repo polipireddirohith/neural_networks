@@ -16,23 +16,7 @@ An interactive educational tool to visualize how Neural Networks learn, built fr
   - Configure architecture (Hidden Neurons, Layers).
   - Watch the Decision Boundary evolve in real-time!
 
-## Installation & Running
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/polipireddirohith/neural_networks.git
-   cd neural_networks
-   ```
-
-2. Install dependencies:
-   ```bash
-   pip install numpy matplotlib streamlit scikit-learn
-   ```
-
-3. Run the application:
-   ```bash
-   streamlit run app.py
-   ```
 
 ## Project Structure
 
